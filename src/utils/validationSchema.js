@@ -3,11 +3,11 @@ import * as Yup from "yup";
 export const emailFormSchema = Yup.object().shape({
   userName: Yup.string()
     .min(2, "Name must be at least 2 characters")
-    .required("User name is required"),
+    .required("Sender name is required"),
 
-  recipientEmail: Yup.string()
+  senderEmail: Yup.string()   
     .email("Invalid email format")
-    .required("Recipient email is required"),
+    .required("Sender email is required"),
 
   subject: Yup.string()
     .min(3, "Subject must be at least 3 characters")
