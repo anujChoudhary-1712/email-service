@@ -20,7 +20,7 @@ class EmailRequest(BaseModel):
     subject: str   
     body: str
 
-@app.post("/send_email")
+@app.post("/send_emails")
 
 def send_emails_api(request: EmailRequest):
     results = []
@@ -47,7 +47,7 @@ def send_emails_api(request: EmailRequest):
                 request.subject, 
                 request.body
             )
-            results.appens({"sender": sender.email, "status": "Successfully Sent", "count": len(sendees)})
+            results.append({"sender": sender.email, "status": "Successfully Sent", "count": len(sendees)})
 
         except Exception as e:
             results.append({"sender": sender.email, "status": f"Failed: {str(e)}"})
