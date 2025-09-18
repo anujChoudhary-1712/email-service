@@ -1,38 +1,55 @@
-from fastapi import FastAPI, HTTPException, Form
-import subprocess
-
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import List
+from bulkemail import send_emails
 
 app = FastAPI()
 
+class Recipient(BaseModel):
+    name: str
+    email: str
 
-    
+class Sender(BaseModel):
+    name: str
+    email: str
+    password: str
 
-@app.get("/")
-def root():
-    return {"message": "Email API is running. Use POST /send-emails to send emails."}
+class EmailRequest(BaseModel):
+    senders : List[Sender]
+    recipients: List[Recipient]
+    subject: str   
+    body: str
 
+@app.post("/send_email")
 
-@app.post("/send_emails")
- 
-def send_emails(subject: str = Form(...), body: str = Form(...)):
-    try:
-        process = subprocess.Popen(
-            ['python', 'bulkemail.py'],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+def send_emails_api(request: EmailRequest):
+    results = []
 
-        input_text = subject + "\n" + body
-        stdout, stderr = process.communicate(input=input_text)
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587  # TLS
+    recipients_per_sender = 20
+
+    for i, sender in enumerate(request.senders):
+        start = i * recipients_per_sender
+        end = start + recipients_per_sender
+        if start >= len(request.recipients):
+            break
+        sendees = request.recipients[start:end]
         
-        if process.returncode != 0:
-            raise HTTPException(status_code=500, detail=f"Error sending emails: {stderr}")
+        try:
+            send_emails(
+                sendees, 
+                sender.name, 
+                sender.email, 
+                sender.password, 
+                smtp_server, 
+                smtp_port, 
+                request.subject, 
+                request.body
+            )
+            results.appens({"sender": sender.email, "status": "Successfully Sent", "count": len(sendees)})
+
+        except Exception as e:
+            results.append({"sender": sender.email, "status": f"Failed: {str(e)}"})
         
-        return {"message": "Emails sent successfully", "output": stdout}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
+    return {"results": results}
