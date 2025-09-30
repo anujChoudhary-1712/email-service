@@ -5,75 +5,105 @@ import { useState } from "react";
 import axios from "axios";
 
 export default function PrimewiseForm() {
-  const [totalEmails, setTotalEmails] = useState(0);
-  const [requiredSenders, setRequiredSenders] = useState(0);
+  const [senders, setSenders] = useState([]);
+  const [recipients, setRecipients] = useState([]);
+  const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const formik = useFormik({
     initialValues: {
-      userName: "",      // Sender Name
-      senderEmail: "",   // Sender Email
+      userName: "",      
+      userEmail: "",   
       subject: "",
-      body: "",
-      recipientsPerSender: 1,
-      csvFile: null,     
+      body: "",     
     },
     validationSchema: emailFormSchema,
     validateOnChange: true,
     validateOnBlur: true,
-    onSubmit: () => {},
+    onSubmit: async (values) => {
+      if (senders.length === 0) {
+        alert("Please upload a valid Senders CSV.");
+        return;
+      }
+      if (recipients.length === 0) {
+        alert("Please upload a valid Recipients CSV");
+        return;
+      }
+
+      const payload = {
+        user:{ name: values.userName, email: values.userEmail },
+        senders: senders.map(s =>({
+          name: s.name,
+          email: s.email,
+          password: s.password,
+        })),
+        recipients: recipients.map(r => ({
+          ...r,
+        })),
+        subject: values.subject,
+        body : values.body,
+      };
+      console.log("Submitting Payload:", JSON.stringify(payload, null, 2));
+
+      try {
+        setLoading(true);
+        const res = await axios.post("http://127.0.0.1:8000/send_emails", payload, {
+          method: "POST",
+          headers : {"Content-Type" : "application/json"},
+        });
+        setResults(res.data);
+        alert("Emails sent successfully!");
+      } catch (err) {
+        if (err.response) {
+          console.error("Error:", err.response.data);
+        } else {
+          console.error("Error sending emails:", err)
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
   });
 
-  const handleCSV = (file) => {
-    Papa.parse(file, {
-      header: false,
-      complete: function (results) {
-        const emails = results.data.flat().filter((email) => email.trim() !== "");
-        setTotalEmails(emails.length);
+  //CSV parsing 
 
-        if (formik.values.recipientsPerSender > 0) {
-          const sendersNeeded = Math.ceil(
-            emails.length / formik.values.recipientsPerSender
-          );
-          setRequiredSenders(sendersNeeded);
-        }
+  const handleSendersCSV =(file) => {
+    Papa.parse(file,{
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const parsed = results.data.map((row) => ({
+          name: row.name?.trim() || "",
+          email: row.email?.trim() || "",
+          password: row.password?.trim() || "",
+        })).filter((r) => r.name && r.email && r.password);
+        setSenders(parsed.filter(s => s.name && s.email && s.password));
       },
     });
   };
 
-  const handleSend = async () => {
-    setLoading(true); 
-    try {
-      await formik.validateForm();
-      if (!formik.isValid) {
-        alert("Please fix validation errors before submitting.");
-        return;
-      }
-
-      const formData = new FormData();
-      formData.append("userName", formik.values.userName);       
-      formData.append("senderEmail", formik.values.senderEmail);
-      formData.append("subject", formik.values.subject);
-      formData.append("body", formik.values.body);
-      formData.append("recipientsPerSender", formik.values.recipientsPerSender);
-
-      if (formik.values.csvFile) {
-        formData.append("csvFile", formik.values.csvFile); 
-      }
-
-     const res = await axios.post("http://127.0.0.1:8000/send_emails", formData, {
-  headers: { "Content-Type": "multipart/form-data" },
-});
-
-
-      alert(res.data.message || "Form submitted successfully!");
-    } catch (err) {
-      console.error("Error submitting form:", err);
-      alert("Failed to submit form!");
-    } finally {
-      setLoading(false); 
-    }
+  const handleRecipientsCSV =(file) => {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      newline: "\n",
+      dynamicTyping: false,
+      complete: (results) => {
+        const parsed = results.data.map((row) => {
+          const cleaned = {}
+          Object.keys(row || {}).forEach((key) => {
+            const safeKey = key.trim();
+            const safeVal = row[key]?.toString().trim() || "";
+            cleaned[safeKey] =safeVal;
+          });
+          return cleaned;
+        }).filter((r) => r.name && r.email);
+        setRecipients(parsed);
+      },
+    });
   };
+
+
 
   return (
     <div className="min-h-screen bg-white relative flex items-center justify-center py-5">
@@ -86,10 +116,10 @@ export default function PrimewiseForm() {
           Primewise Bulk Email Form
         </h1>
 
-        <form className="space-y-5">
+        <form onSubmit={formik.handleSubmit} className="space-y-5">
          
           <div>
-            <label className="block mb-1 font-medium text-gray-700">Sender Name</label>
+            <label className="block mb-1 font-medium text-gray-700">User Name</label>
             <input
               type="text"
               name="userName"
@@ -110,36 +140,53 @@ export default function PrimewiseForm() {
 
          
           <div>
-            <label className="block mb-1 font-medium text-gray-700">Sender Email</label>
+            <label className="block mb-1 font-medium text-gray-700">User Email</label>
             <input
               type="email"
-              name="senderEmail"
+              name="userEmail"
               onChange={formik.handleChange}
               onBlur={formik.handleBlur}
-              value={formik.values.senderEmail}
+              value={formik.values.userEmail}
               className={`w-full border rounded-lg p-2 ${
-                formik.touched.senderEmail && formik.errors.senderEmail
+                formik.touched.userEmail && formik.errors.userEmail
                   ? "border-red-500"
                   : "border-gray-300"
               }`}
-              placeholder="Enter sender email"
+              placeholder="Enter User email"
             />
-            {formik.touched.senderEmail && formik.errors.senderEmail && (
-              <p className="text-red-500 text-sm">{formik.errors.senderEmail}</p>
+            {formik.touched.userEmail && formik.errors.userEmail && (
+              <p className="text-red-500 text-sm">{formik.errors.userEmail}</p>
             )}
           </div>
 
-        
+          <div>
+            <label className="block mb-1 font-medium text-gray-700">Upload CSV of Senders</label>
+            <input 
+            type="file"
+            name="SenderscsvFile"
+            accept=".csv"
+            onChange={(event) => {
+              const file = event.currentTarget.files[0];
+              formik.setFieldValue("csvFile", file);
+              if (file) handleSendersCSV(file);
+            }}
+            className="w-full border border-gray-300 rounded-lg p-2 bg-gray-50"
+            />
+            {formik.touched.csvFile && formik.errors.csvFile && (
+              <p className="text-red-500 text-sm">{formik.errors.csvFile}</p>
+            )}
+          </div>
+
           <div>
             <label className="block mb-1 font-medium text-gray-700">Upload CSV of Recipients</label>
             <input
               type="file"
-              name="csvFile"
+              name="RecipientscsvFile"
               accept=".csv"
               onChange={(event) => {
                 const file = event.currentTarget.files[0];
                 formik.setFieldValue("csvFile", file);
-                if (file) handleCSV(file);
+                if (file) handleRecipientsCSV(file);
               }}
               className="w-full border border-gray-300 rounded-lg p-2 bg-gray-50"
             />
@@ -191,50 +238,10 @@ export default function PrimewiseForm() {
           </div>
 
          
-          <div>
-            <label className="block mb-1 font-medium text-gray-700">Recipients Per Sender</label>
-            <input
-              type="number"
-              name="recipientsPerSender"
-              onChange={(e) => {
-                formik.handleChange(e);
-                if (totalEmails > 0) {
-                  const sendersNeeded = Math.ceil(totalEmails / e.target.value);
-                  setRequiredSenders(sendersNeeded);
-                }
-              }}
-              onBlur={formik.handleBlur}
-              value={formik.values.recipientsPerSender}
-              className={`w-full border rounded-lg p-2 ${
-                formik.touched.recipientsPerSender &&
-                formik.errors.recipientsPerSender
-                  ? "border-red-500"
-                  : "border-gray-300"
-              }`}
-              min="1"
-            />
-            {formik.touched.recipientsPerSender &&
-              formik.errors.recipientsPerSender && (
-                <p className="text-red-500 text-sm">{formik.errors.recipientsPerSender}</p>
-              )}
-          </div>
-
-         
-          {totalEmails > 0 && (
-            <div className="bg-prime-gray p-4 rounded-lg text-center">
-              <p className="font-medium text-gray-700">
-                Total Recipient Emails in CSV: <b>{totalEmails}</b>
-              </p>
-              <p className="font-medium text-gray-700">
-                Required Senders: <b className="text-prime-blue">{requiredSenders}</b>
-              </p>
-            </div>
-          )}
-
+          
          
           <button
-            type="button"
-            onClick={handleSend}
+            type="submit"
             disabled={loading}
             className={`w-full text-white font-semibold py-2 rounded-lg shadow-md transition 
               ${loading ? "bg-gray-400 cursor-not-allowed" : "bg-prime-blue hover:bg-blue-700"}`}
@@ -268,6 +275,39 @@ export default function PrimewiseForm() {
             )}
           </button>
         </form>
+
+        {results && results.results && (
+          <div className=" mt-6 space-y-4">
+            <h3 className="text-xl font-bold text-gray-800">Email Sending Results</h3>
+            <div className="grid gap-4">
+              {results.results.map((res, index) =>
+              <div 
+              key={index} 
+              className={`p-4 rounded-xl shadow-md border transition ${
+                res.status.includes("Success")
+                  ? "bg-green-50 border-green-200"
+                  : "bg-red-50 border-red-200"
+              }`}
+              >
+                <div className="flex justify-between items-center">
+                  <span className="font-semibold text-gray-700">
+                    Sender: <span className="text-blue-600">{res.sender}</span>
+                  </span>
+                  <span
+                  className={`px-3 py-1 rounded-full text-sm font-medium ${
+                    res.status.includes("Success")
+                    ? "bg-green-200 text-green-800" : "bg-red-200 text-red-800"}`}
+                  >
+                    {res.status}
+                  </span>
+                </div>
+                <p className="mt-2 text-gray-600">Emails Sent: <b>{res.count}</b></p>
+              </div>
+              )}
+
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

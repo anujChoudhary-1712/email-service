@@ -24,7 +24,13 @@ def send_emails(sendees, sender_name, sender_email, sender_password, smtp_server
                 sendee_email = sendee['email']
                 head = f"Hi {sendee_name},\n"
                 bottom = f"\n\nBest,\n{sender_name}\nPrimewise Consulting"
-                body = head + mid_body + bottom
+                
+                try:
+                    personalized_mid = mid_body.format(**sendee)
+                except KeyError as e:
+                    personalized_mid = mid_body + f"\n\n[Missing field: {e}]"
+                
+                body = head + personalized_mid + bottom
                 msg = EmailMessage()
                 msg['Subject'] = subject
                 msg['From'] = sender_email

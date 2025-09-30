@@ -1,11 +1,25 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import List
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Extra
+from typing import List, Optional
 from bulkemail import send_emails
 
 app = FastAPI()
 
-class Recipient(BaseModel):
+origins =[
+    "http://localhost:5173"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins = origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"]
+)
+
+
+class Recipient(BaseModel, extra=Extra.allow):
     name: str
     email: str
 
@@ -14,7 +28,12 @@ class Sender(BaseModel):
     email: str
     password: str
 
+class User(BaseModel):
+    name: str
+    email: str
+
 class EmailRequest(BaseModel):
+    user: Optional[User] = None
     senders : List[Sender]
     recipients: List[Recipient]
     subject: str   
@@ -35,17 +54,19 @@ def send_emails_api(request: EmailRequest):
         if start >= len(request.recipients):
             break
         sendees = request.recipients[start:end]
+
+        recipients_for_helper = [r.dict(by_alias = True) for r in sendees]
         
         try:
             send_emails(
-                sendees, 
+                recipients_for_helper,
                 sender.name, 
                 sender.email, 
                 sender.password, 
                 smtp_server, 
                 smtp_port, 
-                request.subject, 
-                request.body
+                request.subject,
+                request.body, 
             )
             results.append({"sender": sender.email, "status": "Successfully Sent", "count": len(sendees)})
 
