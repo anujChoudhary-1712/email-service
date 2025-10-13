@@ -37,11 +37,12 @@ export default function PrimewiseForm() {
         setLoading(true);
         setResults([]); 
 
-        const res = await axios.post(
-          "http://127.0.0.1:8000/send_bulk_emails",
-          formData,
-          { headers: { "Content-Type": "multipart/form-data" } }
-        );
+       const res = await axios.post("http://127.0.0.1:8000/send_emails", payload, {
+          headers: {
+            accept: "application/json",
+            "Content-Type": "application/json",
+          },
+        });
 
         
         const allRecipients = [];
@@ -51,13 +52,14 @@ export default function PrimewiseForm() {
           const sendees = recipients.slice(start, end);
           sendees.forEach((recipient) => {
             allRecipients.push({
-              recipientEmail: recipient.email,
+              recipientEmail: recipient,
               status: "Pending",
             });
           });
         });
 
         setResults(allRecipients);
+
 
        
         res.data.results.forEach((senderResult) => {
