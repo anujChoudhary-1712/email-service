@@ -14,53 +14,59 @@ export const emailFormSchema = Yup.object().shape({
 export default function PrimewiseForm() {
   const [senders, setSenders] = useState([]);
   const [recipients, setRecipients] = useState([]);
-  const [results, setResults] = useState([]);
+  const [recipientStatus, setRecipientStatus] = useState({});
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState({});
 
   const formik = useFormik({
     initialValues: { userName: "", userEmail: "", subject: "", body: "" },
     validationSchema: emailFormSchema,
     onSubmit: async (values) => {
-      if (senders.length === 0 || recipients.length === 0) {
-        return alert("Please upload both senders and recipients CSV files.");
-      }
+      if (!senders.length || !recipients.length) return alert("Upload CSV files!");
 
-      const payload = {
-        subject: values.subject,
-        body: values.body,
-        senders: senders,
-        recipients: recipients,
-      };
+      setLoading(true);
+
+      
+      const initialStatus = {};
+      const initialProgress = {};
+      senders.forEach((s) => {
+        initialStatus[s.email] = recipients.map((r) => ({
+          recipient: r.email,
+          status: "pending",
+          time_taken: null,
+        }));
+        initialProgress[s.email] = 0;
+      });
+      setRecipientStatus(initialStatus);
+      setProgress(initialProgress);
 
       try {
-        setLoading(true);
-        setResults([]);
-
-        const res = await axios.post(
-          "http://127.0.0.1:8000/send_emails",
-          payload,
-          {
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-          }
-        );
-
-        console.log("Server Response:", res.data);
+        const payload = { senders, recipients, subject: values.subject, body: values.body };
 
         
-        const allRecipients = [];
-        senders.forEach((sender, i) => {
-          const start = i * 20;
-          const end = start + 20;
-          const sendees = recipients.slice(start, end);
-          sendees.forEach((recipient) => {
-            allRecipients.push({ recipientEmail: recipient.email });
+        const interval = setInterval(() => {
+          setProgress((prev) => {
+            const updated = { ...prev };
+            senders.forEach((s) => { if (updated[s.email] < 95) updated[s.email] += Math.random() * 5; });
+            return updated;
           });
-        });
+        }, 500);
 
-        setResults(allRecipients);
+        const res = await axios.post("http://127.0.0.1:8000/send_emails", payload);
+        clearInterval(interval);
+
+        
+        const finalProgress = {};
+        senders.forEach((s) => (finalProgress[s.email] = 100));
+        setProgress(finalProgress);
+
+        
+        const updatedStatus = {};
+        res.data.results.forEach((senderResult) => {
+          updatedStatus[senderResult.sender] = senderResult.recipient_results.map((r) => ({ ...r }));
+        });
+        setRecipientStatus(updatedStatus);
+
       } catch (err) {
         console.error(err);
         alert("Failed to send emails");
@@ -79,113 +85,95 @@ export default function PrimewiseForm() {
         const parsed = results.data.map((row) => {
           const cleaned = {};
           Object.keys(row || {}).forEach((k) => {
-            cleaned[k.trim().toLowerCase()] =
-              row[k]?.toString().trim() || "";
+            cleaned[k.trim().toLowerCase()] = row[k]?.toString().trim() || "";
           });
           return cleaned;
         });
-        if (type === "senders") setSenders(parsed);
-        else setRecipients(parsed);
+        type === "senders" ? setSenders(parsed) : setRecipients(parsed);
       },
     });
   };
 
   
-  const handleDrop = (e, type) => {
-    e.preventDefault();
-    if (e.dataTransfer.files.length) handleCSV(e.dataTransfer.files[0], type);
-  };
-  const handleDragOver = (e) => e.preventDefault();
+  const retryEmail = async (senderEmail, recipient) => {
+    try {
+      const payload = { senders: senders.filter((s) => s.email === senderEmail), recipients: [recipient], subject: formik.values.subject, body: formik.values.body };
+      const res = await axios.post("http://127.0.0.1:8000/send_emails", payload);
 
-  
-  const livePreview = recipients.slice(0, 3).map((recipient) => {
-    let personalizedBody = formik.values.body;
+      const updated = { ...recipientStatus };
+      const result = res.data.results[0].recipient_results[0];
+      updated[senderEmail] = updated[senderEmail].map((r) => r.recipient === result.recipient ? { ...r, ...result } : r);
+      setRecipientStatus(updated);
+    } catch (err) {
+      console.error(err);
+      alert("Retry failed");
+    }
+  };
+
+  const getPersonalizedBody = (recipient) => {
+    let body = formik.values.body;
+    if (!recipient) return body;
     Object.keys(recipient).forEach((key) => {
       const regex = new RegExp(`{${key}}`, "gi");
-      personalizedBody = personalizedBody.replace(regex, recipient[key]);
+      body = body.replace(regex, recipient[key]);
     });
-    return { email: recipient.email, body: personalizedBody };
-  });
+    return body;
+  };
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-gray-50">
-     
+  
       <div className="flex-shrink-0 w-full md:w-48 bg-white p-6 flex flex-col items-start sticky top-0">
-        <img
-          src="/logo.png"
-          alt="Primewise Logo"
-          className="w-40 mb-4 sticky top-4"
-        />
+        <img src="/logo.png" alt="Primewise Logo" className="w-40 mb-4 sticky top-4" />
       </div>
 
-     
+    
       <div className="flex-1 overflow-y-auto p-6 md:p-8">
         <div className="bg-white rounded-2xl p-6 md:p-8 w-full max-w-4xl mx-auto space-y-6">
-          <h1 className="text-2xl font-bold text-center">
-            Primewise Bulk Email Form
-          </h1>
+          <h1 className="text-2xl font-bold text-center">Primewise Bulk Email Form</h1>
 
           <form onSubmit={formik.handleSubmit} className="space-y-4">
-            <div>
-              <label className="block mb-1 font-medium">User Name</label>
-              <input
-                type="text"
-                name="userName"
-                onChange={formik.handleChange}
-                value={formik.values.userName}
-                className="w-full border rounded-lg p-2"
-              />
-            </div>
-
-            <div>
-              <label className="block mb-1 font-medium">User Email</label>
-              <input
-                type="email"
-                name="userEmail"
-                onChange={formik.handleChange}
-                value={formik.values.userEmail}
-                className="w-full border rounded-lg p-2"
-              />
-            </div>
-
-            <div>
-              <label className="block mb-1 font-medium">Subject</label>
-              <input
-                type="text"
-                name="subject"
-                onChange={formik.handleChange}
-                value={formik.values.subject}
-                className="w-full border rounded-lg p-2"
-              />
-            </div>
-
-            <div>
-              <label className="block mb-1 font-medium">Message Body</label>
-              <textarea
-                name="body"
-                onChange={formik.handleChange}
-                value={formik.values.body}
-                rows={4}
-                placeholder="Use {name}, {role}, etc."
-                className="w-full border rounded-lg p-2"
-              />
-            </div>
+            <input
+              name="userName"
+              placeholder="User Name"
+              className="w-full border rounded-lg p-2"
+              onChange={formik.handleChange}
+              value={formik.values.userName}
+            />
+            <input
+              name="userEmail"
+              placeholder="User Email"
+              className="w-full border rounded-lg p-2"
+              onChange={formik.handleChange}
+              value={formik.values.userEmail}
+            />
+            <input
+              name="subject"
+              placeholder="Subject"
+              className="w-full border rounded-lg p-2"
+              onChange={formik.handleChange}
+              value={formik.values.subject}
+            />
+            <textarea
+              name="body"
+              placeholder="Message Body (use {name}, {company}, {role}, {location})"
+              rows={4}
+              className="w-full border rounded-lg p-2"
+              onChange={formik.handleChange}
+              value={formik.values.body}
+            />
 
             {["senders", "recipients"].map((type) => (
               <div
                 key={type}
-                onDrop={(e) => handleDrop(e, type)}
-                onDragOver={handleDragOver}
+                onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files.length) handleCSV(e.dataTransfer.files[0], type); }}
+                onDragOver={(e) => e.preventDefault()}
                 onClick={() => document.getElementById(type + "-file").click()}
                 className="border-2 border-dashed p-4 rounded-lg text-center cursor-pointer hover:border-blue-500"
               >
                 {type === "senders"
-                  ? senders.length > 0
-                    ? `Senders CSV Loaded (${senders.length})`
-                    : "Upload Senders CSV"
-                  : recipients.length > 0
-                  ? `Recipients CSV Loaded (${recipients.length})`
-                  : "Upload Recipients CSV"}
+                  ? senders.length > 0 ? `Senders CSV Loaded (${senders.length})` : "Upload Senders CSV"
+                  : recipients.length > 0 ? `Recipients CSV Loaded (${recipients.length})` : "Upload Recipients CSV"}
                 <input
                   id={type + "-file"}
                   type="file"
@@ -199,44 +187,74 @@ export default function PrimewiseForm() {
             <button
               type="submit"
               disabled={loading}
-              className={`w-full py-2 rounded-lg text-white font-semibold ${
-                loading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"
-              }`}
+              className={`w-full py-2 rounded-lg text-white font-semibold ${loading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}
             >
               {loading ? "Sending..." : "Send Emails"}
             </button>
           </form>
 
-         
-          {livePreview.length > 0 && (
-            <div className="mt-4 p-4 border rounded-lg bg-gray-50">
-              <h3 className="font-semibold mb-2">Live Preview</h3>
-              {livePreview.map((item, idx) => (
-                <div key={idx} className="mb-2 p-2 border rounded bg-white">
-                  <p>
-                    <strong>Recipient:</strong> {item.email}
-                  </p>
-                  <p className="whitespace-pre-wrap">{item.body}</p>
+          
+          {recipients.length > 0 && (
+            <div className="mt-6 p-4 border rounded-lg bg-gray-50 max-h-96 overflow-y-auto">
+              <h2 className="text-lg font-semibold mb-2">Live Preview</h2>
+              {recipients.map((recipient, idx) => (
+                <div key={idx} className="mb-3 p-3 border rounded bg-white">
+                  <p className="font-medium"><strong>{recipient.email}</strong></p>
+                  <p className="text-gray-700 text-sm">{getPersonalizedBody(recipient)}</p>
                 </div>
               ))}
-              {recipients.length > 3 && <p>...and more recipients</p>}
             </div>
           )}
 
-         
-          {results.length > 0 && (
-            <div className="mt-6 p-4 border rounded-lg bg-gray-50 max-h-96 overflow-y-auto">
-              <h3 className="font-semibold mb-2">Recipients</h3>
-              {results.map((r, idx) => (
-                <div
-                  key={idx}
-                  className="mb-1 p-2 border rounded bg-white flex justify-between items-center"
-                >
-                  <span>{r.recipientEmail}</span>
+  
+          {senders.length > 0 && (
+            <div className="mt-6">
+              <h3 className="font-semibold mb-2">Sending Progress</h3>
+              {senders.map((s) => (
+                <div key={s.email} className="mb-3">
+                  <p className="text-sm font-medium">{s.email}</p>
+                  <div className="w-full bg-gray-200 h-3 rounded-full">
+                    <div className="bg-blue-600 h-3 rounded-full transition-all duration-300" style={{ width: `${progress[s.email] || 0}%` }}></div>
+                  </div>
                 </div>
               ))}
             </div>
           )}
+
+          
+          {Object.keys(recipientStatus).length > 0 && (
+            <div className="mt-6 p-4 border rounded-lg bg-gray-50 max-h-96 overflow-y-auto">
+              {Object.entries(recipientStatus).map(([senderEmail, recs]) => (
+                <div key={senderEmail} className="mb-4">
+                  <h3 className="font-semibold mb-2">{senderEmail}</h3>
+                  <ul className="space-y-2 text-sm">
+                    {recs.map((r, idx) => (
+                      <li key={idx} className="flex flex-col md:flex-row justify-between items-start md:items-center p-2 border rounded bg-white">
+                        <div>
+                          <p><strong>{r.recipient}</strong></p>
+                          <p className="text-gray-700 text-sm">{getPersonalizedBody(recipients.find(rec => rec.email === r.recipient) || {})}</p>
+                          {r.time_taken && <p className="text-xs text-gray-500">⏱ {r.time_taken}</p>}
+                        </div>
+                        <div className="flex items-center gap-2 mt-2 md:mt-0">
+                          {r.status === "sent" && <span className="text-green-600">✅ Sent</span>}
+                          {r.status.startsWith("failed") && (
+                            <>
+                              <span className="text-red-600">❌ Failed</span>
+                              <button onClick={() => retryEmail(senderEmail, recipients.find(rec => rec.email === r.recipient))} className="ml-2 px-2 py-1 bg-blue-500 text-white rounded text-xs">
+                                Retry
+                              </button>
+                            </>
+                          )}
+                          {r.status === "pending" && <span className="text-gray-500">⏳ Pending</span>}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+
         </div>
       </div>
     </div>
