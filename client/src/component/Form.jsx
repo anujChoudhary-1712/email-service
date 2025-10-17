@@ -1,273 +1,261 @@
 import { useFormik } from "formik";
-import { emailFormSchema } from "../utils/validationSchema";
+import * as Yup from "yup";
 import Papa from "papaparse";
 import { useState } from "react";
 import axios from "axios";
 
+export const emailFormSchema = Yup.object().shape({
+  userName: Yup.string().min(2).required("Required"),
+  userEmail: Yup.string().email("Invalid email").required("Required"),
+  subject: Yup.string().min(3).required("Required"),
+  body: Yup.string().min(10).required("Required"),
+});
+
 export default function PrimewiseForm() {
-  const [totalEmails, setTotalEmails] = useState(0);
-  const [requiredSenders, setRequiredSenders] = useState(0);
+  const [senders, setSenders] = useState([]);
+  const [recipients, setRecipients] = useState([]);
+  const [recipientStatus, setRecipientStatus] = useState({});
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState({});
 
   const formik = useFormik({
-    initialValues: {
-      userName: "",      // Sender Name
-      senderEmail: "",   // Sender Email
-      subject: "",
-      body: "",
-      recipientsPerSender: 1,
-      csvFile: null,     
-    },
+    initialValues: { userName: "", userEmail: "", subject: "", body: "" },
     validationSchema: emailFormSchema,
-    validateOnChange: true,
-    validateOnBlur: true,
-    onSubmit: () => {},
+    onSubmit: async (values) => {
+      if (!senders.length || !recipients.length) return alert("Upload CSV files!");
+
+      setLoading(true);
+
+      
+      const initialStatus = {};
+      const initialProgress = {};
+      senders.forEach((s) => {
+        initialStatus[s.email] = recipients.map((r) => ({
+          recipient: r.email,
+          status: "pending",
+          time_taken: null,
+        }));
+        initialProgress[s.email] = 0;
+      });
+      setRecipientStatus(initialStatus);
+      setProgress(initialProgress);
+
+      try {
+        const payload = { senders, recipients, subject: values.subject, body: values.body };
+
+        
+        const interval = setInterval(() => {
+          setProgress((prev) => {
+            const updated = { ...prev };
+            senders.forEach((s) => { if (updated[s.email] < 95) updated[s.email] += Math.random() * 5; });
+            return updated;
+          });
+        }, 500);
+
+        const res = await axios.post("http://127.0.0.1:8000/send_emails", payload);
+        clearInterval(interval);
+
+        
+        const finalProgress = {};
+        senders.forEach((s) => (finalProgress[s.email] = 100));
+        setProgress(finalProgress);
+
+        
+        const updatedStatus = {};
+        res.data.results.forEach((senderResult) => {
+          updatedStatus[senderResult.sender] = senderResult.recipient_results.map((r) => ({ ...r }));
+        });
+        setRecipientStatus(updatedStatus);
+
+      } catch (err) {
+        console.error(err);
+        alert("Failed to send emails");
+      } finally {
+        setLoading(false);
+      }
+    },
   });
 
-  const handleCSV = (file) => {
+  
+  const handleCSV = (file, type) => {
     Papa.parse(file, {
-      header: false,
-      complete: function (results) {
-        const emails = results.data.flat().filter((email) => email.trim() !== "");
-        setTotalEmails(emails.length);
-
-        if (formik.values.recipientsPerSender > 0) {
-          const sendersNeeded = Math.ceil(
-            emails.length / formik.values.recipientsPerSender
-          );
-          setRequiredSenders(sendersNeeded);
-        }
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const parsed = results.data.map((row) => {
+          const cleaned = {};
+          Object.keys(row || {}).forEach((k) => {
+            cleaned[k.trim().toLowerCase()] = row[k]?.toString().trim() || "";
+          });
+          return cleaned;
+        });
+        type === "senders" ? setSenders(parsed) : setRecipients(parsed);
       },
     });
   };
 
-  const handleSend = async () => {
-    setLoading(true); 
+  
+  const retryEmail = async (senderEmail, recipient) => {
     try {
-      await formik.validateForm();
-      if (!formik.isValid) {
-        alert("Please fix validation errors before submitting.");
-        return;
-      }
+      const payload = { senders: senders.filter((s) => s.email === senderEmail), recipients: [recipient], subject: formik.values.subject, body: formik.values.body };
+      const res = await axios.post("http://127.0.0.1:8000/send_emails", payload);
 
-      const formData = new FormData();
-      formData.append("userName", formik.values.userName);       
-      formData.append("senderEmail", formik.values.senderEmail);
-      formData.append("subject", formik.values.subject);
-      formData.append("body", formik.values.body);
-      formData.append("recipientsPerSender", formik.values.recipientsPerSender);
-
-      if (formik.values.csvFile) {
-        formData.append("csvFile", formik.values.csvFile); 
-      }
-
-     const res = await axios.post("http://127.0.0.1:8000/send_emails", formData, {
-  headers: { "Content-Type": "multipart/form-data" },
-});
-
-
-      alert(res.data.message || "Form submitted successfully!");
+      const updated = { ...recipientStatus };
+      const result = res.data.results[0].recipient_results[0];
+      updated[senderEmail] = updated[senderEmail].map((r) => r.recipient === result.recipient ? { ...r, ...result } : r);
+      setRecipientStatus(updated);
     } catch (err) {
-      console.error("Error submitting form:", err);
-      alert("Failed to submit form!");
-    } finally {
-      setLoading(false); 
+      console.error(err);
+      alert("Retry failed");
     }
   };
 
+  const getPersonalizedBody = (recipient) => {
+    let body = formik.values.body;
+    if (!recipient) return body;
+    Object.keys(recipient).forEach((key) => {
+      const regex = new RegExp(`{${key}}`, "gi");
+      body = body.replace(regex, recipient[key]);
+    });
+    return body;
+  };
+
   return (
-    <div className="min-h-screen bg-white relative flex items-center justify-center py-5">
-      <div className="absolute top-4 left-4">
-        <img src="/public/logo.png" alt="primewise" className="h-12" />
+    <div className="min-h-screen flex flex-col md:flex-row bg-gray-50">
+  
+      <div className="flex-shrink-0 w-full md:w-48 bg-white p-6 flex flex-col items-start sticky top-0">
+        <img src="/logo.png" alt="Primewise Logo" className="w-40 mb-4 sticky top-4" />
       </div>
 
-      <div className="font-sans font-normal bg-white border-2 border-black-100 shadow-xl rounded-2xl p-8 my-16 w-full max-w-2xl">
-        <h1 className="text-2xl font-bold text-black mb-6 text-center">
-          Primewise Bulk Email Form
-        </h1>
+    
+      <div className="flex-1 overflow-y-auto p-6 md:p-8">
+        <div className="bg-white rounded-2xl p-6 md:p-8 w-full max-w-4xl mx-auto space-y-6">
+          <h1 className="text-2xl font-bold text-center">Primewise Bulk Email Form</h1>
 
-        <form className="space-y-5">
-         
-          <div>
-            <label className="block mb-1 font-medium text-gray-700">Sender Name</label>
+          <form onSubmit={formik.handleSubmit} className="space-y-4">
             <input
-              type="text"
               name="userName"
+              placeholder="User Name"
+              className="w-full border rounded-lg p-2"
               onChange={formik.handleChange}
-              onBlur={formik.handleBlur}
               value={formik.values.userName}
-              className={`w-full border rounded-lg p-2 ${
-                formik.touched.userName && formik.errors.userName
-                  ? "border-red-500"
-                  : "border-gray-300"
-              }`}
-              placeholder="Enter sender name"
             />
-            {formik.touched.userName && formik.errors.userName && (
-              <p className="text-red-500 text-sm">{formik.errors.userName}</p>
-            )}
-          </div>
-
-         
-          <div>
-            <label className="block mb-1 font-medium text-gray-700">Sender Email</label>
             <input
-              type="email"
-              name="senderEmail"
+              name="userEmail"
+              placeholder="User Email"
+              className="w-full border rounded-lg p-2"
               onChange={formik.handleChange}
-              onBlur={formik.handleBlur}
-              value={formik.values.senderEmail}
-              className={`w-full border rounded-lg p-2 ${
-                formik.touched.senderEmail && formik.errors.senderEmail
-                  ? "border-red-500"
-                  : "border-gray-300"
-              }`}
-              placeholder="Enter sender email"
+              value={formik.values.userEmail}
             />
-            {formik.touched.senderEmail && formik.errors.senderEmail && (
-              <p className="text-red-500 text-sm">{formik.errors.senderEmail}</p>
-            )}
-          </div>
-
-        
-          <div>
-            <label className="block mb-1 font-medium text-gray-700">Upload CSV of Recipients</label>
             <input
-              type="file"
-              name="csvFile"
-              accept=".csv"
-              onChange={(event) => {
-                const file = event.currentTarget.files[0];
-                formik.setFieldValue("csvFile", file);
-                if (file) handleCSV(file);
-              }}
-              className="w-full border border-gray-300 rounded-lg p-2 bg-gray-50"
-            />
-            {formik.touched.csvFile && formik.errors.csvFile && (
-              <p className="text-red-500 text-sm">{formik.errors.csvFile}</p>
-            )}
-          </div>
-
-          
-          <div>
-            <label className="block mb-1 font-medium text-gray-700">Subject</label>
-            <input
-              type="text"
               name="subject"
+              placeholder="Subject"
+              className="w-full border rounded-lg p-2"
               onChange={formik.handleChange}
-              onBlur={formik.handleBlur}
               value={formik.values.subject}
-              className={`w-full border rounded-lg p-2 ${
-                formik.touched.subject && formik.errors.subject
-                  ? "border-red-500"
-                  : "border-gray-300"
-              }`}
-              placeholder="Enter email subject"
             />
-            {formik.touched.subject && formik.errors.subject && (
-              <p className="text-red-500 text-sm">{formik.errors.subject}</p>
-            )}
-          </div>
-
-          
-          <div>
-            <label className="block mb-1 font-medium text-gray-700">Email Body</label>
             <textarea
               name="body"
+              placeholder="Message Body (use {name}, {company}, {role}, {location})"
+              rows={4}
+              className="w-full border rounded-lg p-2"
               onChange={formik.handleChange}
-              onBlur={formik.handleBlur}
               value={formik.values.body}
-              rows="4"
-              className={`w-full border rounded-lg p-2 ${
-                formik.touched.body && formik.errors.body
-                  ? "border-red-500"
-                  : "border-gray-300"
-              }`}
-              placeholder="Write your email here..."
             />
-            {formik.touched.body && formik.errors.body && (
-              <p className="text-red-500 text-sm">{formik.errors.body}</p>
-            )}
-          </div>
 
-         
-          <div>
-            <label className="block mb-1 font-medium text-gray-700">Recipients Per Sender</label>
-            <input
-              type="number"
-              name="recipientsPerSender"
-              onChange={(e) => {
-                formik.handleChange(e);
-                if (totalEmails > 0) {
-                  const sendersNeeded = Math.ceil(totalEmails / e.target.value);
-                  setRequiredSenders(sendersNeeded);
-                }
-              }}
-              onBlur={formik.handleBlur}
-              value={formik.values.recipientsPerSender}
-              className={`w-full border rounded-lg p-2 ${
-                formik.touched.recipientsPerSender &&
-                formik.errors.recipientsPerSender
-                  ? "border-red-500"
-                  : "border-gray-300"
-              }`}
-              min="1"
-            />
-            {formik.touched.recipientsPerSender &&
-              formik.errors.recipientsPerSender && (
-                <p className="text-red-500 text-sm">{formik.errors.recipientsPerSender}</p>
-              )}
-          </div>
+            {["senders", "recipients"].map((type) => (
+              <div
+                key={type}
+                onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files.length) handleCSV(e.dataTransfer.files[0], type); }}
+                onDragOver={(e) => e.preventDefault()}
+                onClick={() => document.getElementById(type + "-file").click()}
+                className="border-2 border-dashed p-4 rounded-lg text-center cursor-pointer hover:border-blue-500"
+              >
+                {type === "senders"
+                  ? senders.length > 0 ? `Senders CSV Loaded (${senders.length})` : "Upload Senders CSV"
+                  : recipients.length > 0 ? `Recipients CSV Loaded (${recipients.length})` : "Upload Recipients CSV"}
+                <input
+                  id={type + "-file"}
+                  type="file"
+                  accept=".csv"
+                  onChange={(e) => handleCSV(e.target.files[0], type)}
+                  className="hidden"
+                />
+              </div>
+            ))}
 
-         
-          {totalEmails > 0 && (
-            <div className="bg-prime-gray p-4 rounded-lg text-center">
-              <p className="font-medium text-gray-700">
-                Total Recipient Emails in CSV: <b>{totalEmails}</b>
-              </p>
-              <p className="font-medium text-gray-700">
-                Required Senders: <b className="text-prime-blue">{requiredSenders}</b>
-              </p>
+            <button
+              type="submit"
+              disabled={loading}
+              className={`w-full py-2 rounded-lg text-white font-semibold ${loading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"}`}
+            >
+              {loading ? "Sending..." : "Send Emails"}
+            </button>
+          </form>
+
+          
+          {recipients.length > 0 && (
+            <div className="mt-6 p-4 border rounded-lg bg-gray-50 max-h-96 overflow-y-auto">
+              <h2 className="text-lg font-semibold mb-2">Live Preview</h2>
+              {recipients.map((recipient, idx) => (
+                <div key={idx} className="mb-3 p-3 border rounded bg-white">
+                  <p className="font-medium"><strong>{recipient.email}</strong></p>
+                  <p className="text-gray-700 text-sm">{getPersonalizedBody(recipient)}</p>
+                </div>
+              ))}
             </div>
           )}
 
-         
-          <button
-            type="button"
-            onClick={handleSend}
-            disabled={loading}
-            className={`w-full text-white font-semibold py-2 rounded-lg shadow-md transition 
-              ${loading ? "bg-gray-400 cursor-not-allowed" : "bg-prime-blue hover:bg-blue-700"}`}
-          >
-            {loading ? (
-              <div className="flex items-center justify-center space-x-2">
-                <svg
-                  className="animate-spin h-5 w-5 text-white"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                  />
-                </svg>
-                <span>Sending...</span>
-              </div>
-            ) : (
-              "Send Emails"
-            )}
-          </button>
-        </form>
+  
+          {senders.length > 0 && (
+            <div className="mt-6">
+              <h3 className="font-semibold mb-2">Sending Progress</h3>
+              {senders.map((s) => (
+                <div key={s.email} className="mb-3">
+                  <p className="text-sm font-medium">{s.email}</p>
+                  <div className="w-full bg-gray-200 h-3 rounded-full">
+                    <div className="bg-blue-600 h-3 rounded-full transition-all duration-300" style={{ width: `${progress[s.email] || 0}%` }}></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          
+          {Object.keys(recipientStatus).length > 0 && (
+            <div className="mt-6 p-4 border rounded-lg bg-gray-50 max-h-96 overflow-y-auto">
+              {Object.entries(recipientStatus).map(([senderEmail, recs]) => (
+                <div key={senderEmail} className="mb-4">
+                  <h3 className="font-semibold mb-2">{senderEmail}</h3>
+                  <ul className="space-y-2 text-sm">
+                    {recs.map((r, idx) => (
+                      <li key={idx} className="flex flex-col md:flex-row justify-between items-start md:items-center p-2 border rounded bg-white">
+                        <div>
+                          <p><strong>{r.recipient}</strong></p>
+                          <p className="text-gray-700 text-sm">{getPersonalizedBody(recipients.find(rec => rec.email === r.recipient) || {})}</p>
+                          {r.time_taken && <p className="text-xs text-gray-500">⏱ {r.time_taken}</p>}
+                        </div>
+                        <div className="flex items-center gap-2 mt-2 md:mt-0">
+                          {r.status === "sent" && <span className="text-green-600">✅ Sent</span>}
+                          {r.status.startsWith("failed") && (
+                            <>
+                              <span className="text-red-600">❌ Failed</span>
+                              <button onClick={() => retryEmail(senderEmail, recipients.find(rec => rec.email === r.recipient))} className="ml-2 px-2 py-1 bg-blue-500 text-white rounded text-xs">
+                                Retry
+                              </button>
+                            </>
+                          )}
+                          {r.status === "pending" && <span className="text-gray-500">⏳ Pending</span>}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          )}
+
+        </div>
       </div>
     </div>
   );
